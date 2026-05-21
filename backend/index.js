@@ -6,10 +6,14 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import nodemailer from "nodemailer";
+import dotenv from "dotenv"
 
+dotenv.config();
 const app = express();
 
 app.use(cors());
+app.use(express.json());
 
 const server = http.createServer(app);
 
@@ -19,6 +23,147 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
   },
 });
+
+// OTP Storage
+const otpStore={};
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+
+transporter.verify((err, success) => {
+  if (err) {
+    console.log(err);
+  } else {
+    console.log("Mail server ready");
+  }
+});
+
+// generating the otp
+const generateOTP = () => {
+  return Math.floor(
+    100000 + Math.random() * 900000
+  ).toString();
+};
+
+app.post(
+  "/send-otp",
+  async (req, res) => {
+    try {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: "Email required",
+        });
+      }
+
+      const otp = generateOTP();
+
+      otpStore[email] = {
+        otp,
+        verified: false,
+        expiresAt:
+          Date.now() +
+          5 * 60 * 1000,
+      };
+
+      await transporter.sendMail({
+        from:
+          process.env.EMAIL_USER,
+        to: email,
+        subject: "OTP Verification",
+        html: `
+          <h2>Your OTP</h2>
+          <h1>${otp}</h1>
+          <p>Valid for 5 minutes</p>
+        `,
+      });
+
+      console.log(otpStore);
+
+      res.json({
+        success: true,
+        message:
+          "OTP sent successfully",
+      });
+    } catch (error) {
+      console.log(error);
+
+      res.status(500).json({
+        success: false,
+        message:
+          "Failed to send OTP",
+      });
+    }
+  }
+);
+
+// =========================
+// VERIFY OTP ROUTE
+// =========================
+app.post(
+  "/verify-otp",
+  (req, res) => {
+    try {
+      const { email, otp } =
+        req.body;
+
+      const storedData =
+        otpStore[email];
+
+      if (!storedData) {
+        return res.status(400).json({
+          success: false,
+          message: "OTP not found",
+        });
+      }
+
+      if (
+        Date.now() >
+        storedData.expiresAt
+      ) {
+        delete otpStore[email];
+
+        return res.status(400).json({
+          success: false,
+          message: "OTP expired",
+        });
+      }
+
+      if (
+        storedData.otp === otp
+      ) {
+        otpStore[email].verified =
+          true;
+
+        return res.json({
+          success: true,
+          message:
+            "OTP verified successfully",
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    } catch (error) {
+      console.log(error);
+
+      res.status(500).json({
+        success: false,
+        message: "Server Error",
+      });
+    }
+  }
+);
 
 let group = [];
 
